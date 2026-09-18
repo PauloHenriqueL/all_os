@@ -501,9 +501,13 @@ Railway CLI — útil antes da virada, mesmo com os dados sendo descartáveis.
 
 ## 13. Ordem de implementação e status (atualizado 2026-09-15)
 
-Legenda: ✅ feito · 🟡 feito em parte · ⬜ falta. Todo o trabalho está na branch
-local `feat/postgres-fase1`, **sem commit e sem push** — o destino combinado é o
-fork `github.com/PauloHenriqueL/all_os`, e só depois de o usuário autorizar.
+Legenda: ✅ feito · 🟡 feito em parte · ⬜ falta. **Subido em 2026-09-18**: a
+branch `feat/postgres-fase1` está no fork
+`github.com/PauloHenriqueL/all_os` (commit `dfe12de`, 121 arquivos). O `origin`
+segue apontando para `arthurbpinho/all_os` (upstream) e **não** recebeu nada; o
+fork foi adicionado como remote `fork`. Os prompts continuam fora do git — as
+cópias soltas `v34.md` e `lts.md` na raiz entraram no `.gitignore` antes do
+push, porque os dois repositórios são públicos (§9.2).
 
 ### 13.1 Fase 1 — migração para o PostgreSQL
 
@@ -940,7 +944,8 @@ inteiro → altera → regrava" virou transação sobre o item (§2.4.2).
 - [ ] E-mail, captcha e `APP_BASE_URL` configurados (§17.3).
 - [ ] Depois do primeiro boot: conferir em Administração → Prompts que os prompts de
       produção estão lá e que a avaliação roda.
-- [ ] Commit e push para o fork `PauloHenriqueL/all_os` **só com autorização**.
+- [x] ~~Commit e push para o fork `PauloHenriqueL/all_os`~~ → feito em 2026-09-18
+      (branch `feat/postgres-fase1`, commit `dfe12de`).
 
 ---
 
