@@ -24,19 +24,58 @@ boot do app contra o banco importado, prompts e critérios semeados sozinhos.
 
 1. Avisar os usuários do horário (a janela entre a cópia e a virada perde o que
    for feito no sistema antigo).
-2. **Cópia de segurança do volume inteiro**, para fora do Railway:
+2. **Cópia de segurança do volume inteiro**, para fora do Railway. Feito em
+   2026-09-22 pelo **Console do painel do Railway**, sem instalar CLI:
    ```bash
-   railway run bash
-   tar czf /tmp/data-backup.tar.gz -C / data
-   # trazer o arquivo para a sua máquina (ver DEPLOY.md, "Backup recomendado")
+   tar czf /app/data-backup.tar.gz -C / data && ls -lh /app/data-backup.tar.gz
    ```
-   É desta cópia que a importação lê. Ela também é o backup dos prompts (§9).
+   O `-C /` guarda os caminhos como `data/...`, que é o que a importação espera.
+   O pacote é criado em `/app` de propósito: é onde o painel **Files** (rodapé do
+   Console) enxerga e permite baixar. Volume inteiro = 9,8 MB → 3,3 MB comprimido.
+   Depois do download, `rm /app/data-backup.tar.gz` — o pacote tem hashes de
+   senha, PII e transcrições, e `/app` não é lugar para isso ficar.
+
+   > **Não use `railway run bash`** (era o que este documento e o `DEPLOY.md`
+   > mandavam). O `railway run` executa na SUA máquina com as variáveis do
+   > Railway injetadas; ele não enxerga o `/data`, que está dentro do container.
+   > Os caminhos que funcionam são o Console do painel e o `railway ssh`.
+
+   É desta cópia que a importação lê. Ela também é o backup dos prompts (§9), e
+   por isso vai para **mais de um lugar** (em 22/09: disco, pen drive e o Drive
+   da Allos).
 3. Baixar também o export pela tela (Administração → exportar), como segunda cópia.
 
 ## 2. Banco
 
 1. Criar o projeto no **Neon**, Postgres **17**.
-2. Anotar a connection string (com `?sslmode=require`).
+2. **Desligue o "Object storage"** na criação. O app não usa bucket: as fotos
+   ficam no volume do Railway (§0). Ligado, é serviço a mais para cobrar e mais
+   uma coisa para alguém confundir depois com "onde estão as fotos".
+3. Anotar a connection string (com `?sslmode=require`).
+4. 🔴 **Use o endpoint DIRETO, não o `-pooler`.** O Neon oferece os dois; o
+   `-pooler` é PgBouncer em modo transação. O runner de migrações segura um
+   **advisory lock de sessão** (`server/db/migrate.js`), e o próprio comentário
+   de lá explica o porquê: o lock pertence à sessão, e uma conexão que troca de
+   dono entre as transações o perde. Com o pooler, a proteção contra dois
+   processos migrando ao mesmo tempo some **em silêncio**. A diferença entre as
+   duas strings é o texto `-pooler` no host.
+
+**Feito em 2026-09-22:** projeto no Neon, Postgres **17.11**, região
+**AWS us-east-2 (Ohio)**, endpoint direto. A região ficou em Ohio e não em
+`us-east-1` (Virgínia, ao lado do `us-east4` do Railway) — **decisão do dono,
+mantida conscientemente**; custa uns 10–15 ms por consulta.
+
+A connection string mora em `~/.neon-url` (fora do repositório, `chmod 600`) e
+entra nos comandos por substituição, para não ficar no histórico do shell nem
+em arquivo versionado:
+
+```bash
+DATABASE_URL="$(cat ~/.neon-url)" node scripts/importar-volume.js ./data
+```
+
+**Não ponha a string do Neon no `.env`**: esse arquivo é lido pelo app e pela
+suíte de testes a cada execução local (`server/index.js:1`), e o `npm run dev`
+passaria a falar com produção.
 
 ## 3. Importar (ANTES do primeiro boot do app novo)
 
@@ -44,9 +83,17 @@ Na sua máquina, com a cópia do volume descompactada:
 
 ```bash
 tar xzf data-backup.tar.gz          # cria ./data
-DATABASE_URL='postgres://…neon…' node scripts/importar-volume.js ./data
+DATABASE_URL="$(cat ~/.neon-url)" node scripts/importar-volume.js ./data
 ```
 
+- ⚠️ **Confira a primeira linha da saída**, que imprime o banco. O script carrega
+  o `.env` do projeto (`require('dotenv').config()`); esquecer a variável na
+  frente do comando faz a importação cair no **Postgres local** sem avisar.
+- ⏱️ **Demora, e o gargalo é a rede.** A importação insere um registro por vez:
+  uma ida e volta até o banco para cada linha. Rodando do Brasil contra o Neon em
+  Ohio a latência medida foi de **639 ms por consulta**, e ~2.900 inserções
+  levaram ~25 min. Não é sintoma de problema. Em produção quem fala com o banco é
+  o Railway (mesma costa), não a máquina de quem migra.
 - O script aplica as migrações e importa. O banco precisa estar vazio.
 - Os catálogos entram junto (`freeplay-characters.json`, `neuro-characters.json`,
   `exercises.json`, `trilha-skills.json`), com a marca de semeado: o boot não
@@ -79,11 +126,40 @@ Administração → Prompts.
 ## 4. App novo no Railway
 
 1. Projeto novo, apontando para a branch com o banco.
-2. **Montar o MESMO volume em `/data`** (ou restaurar a cópia nele).
-3. Variáveis: as de hoje (`JWT_SECRET` igual ao atual, `ADMIN_INITIAL_PASSWORD`,
-   chaves de IA, VAPID, Graph, Turnstile, `APP_BASE_URL`) **mais** `DATABASE_URL`.
-4. **Uma réplica só.**
-5. Subir. No log do boot deve aparecer `[prompts] N prompt(s) semeado(s) no banco.`
+2. **Volume NOVO, com a cópia restaurada nele** — decisão de 2026-09-23.
+   Não compartilhe o volume com o projeto antigo: os prompts do v34 atualizados
+   usam `{{N_CRITERIOS}}`, e o **código antigo não substitui esses marcadores**
+   (verificado: nenhuma ocorrência no `main`). Com volume compartilhado, copiar
+   os prompts novos trocaria os prompts do sistema que ainda está no ar. Com
+   volume próprio, a Fase 4 (§3b) pode ser feita com calma, antes de subir o app,
+   e o plano de volta (§7) fica limpo: o projeto antigo segue intocado.
+3. Variáveis: as de hoje (`ADMIN_INITIAL_PASSWORD`, chaves de IA, Graph,
+   Turnstile, `APP_BASE_URL`) **mais** `DATABASE_URL`, e mais o que a decisão
+   abaixo define para `JWT_SECRET` e VAPID.
+
+   **Decisão de 2026-09-22 — `JWT_SECRET` e VAPID: os MESMOS da produção atual**,
+   e rotacionar o secret **depois**, como passo separado, com o sistema antigo já
+   fora do ar. O que sustenta:
+   - Os dois sistemas ficam no ar ao mesmo tempo. Com o mesmo secret, quem cai
+     num lado e depois no outro transita sem perceber; com secrets diferentes é
+     deslogado a cada troca, justamente na semana de mais suporte.
+   - O token dura 7 dias e carrega `{ sub, role, username, tv }`
+     (`server/index.js`, `signToken`). A importação preserva id e `token_version`
+     de cada conta (`server/importar-volume.js`), então um token emitido hoje
+     pelo sistema antigo é aceito pelo novo sem ajuste nenhum.
+   - Trocar o VAPID é menos grave do que parece: `client/src/push.js` compara a
+     chave da assinatura existente com a atual do servidor e reassina sozinho, no
+     boot do app, sem prompt. Perde-se só o push disparado entre a virada e a
+     próxima visita da pessoa. Ainda assim, manter é de graça.
+   - Contra-argumento registrado: esse `JWT_SECRET` hoje existe em mais lugares
+     do que existia (`.env.producao` na máquina do Paulo, além do painel). Não
+     foi para o git — `.env*` está no `.gitignore` —, mas é o motivo de a
+     rotação ficar agendada em vez de descartada.
+4. **Trocar `SELECAO_PASSWORD` e `BENCHMARK_PASSWORD`.** Os defaults do código
+   (`allos01` e `albires1`) estão escritos em `server/index.js`, num repositório
+   **público**.
+5. **Uma réplica só.**
+6. Subir. No log do boot deve aparecer `[prompts] N prompt(s) semeado(s) no banco.`
    Não deve aparecer `[catalogo] semeado(s) no banco` — os catálogos já vieram da
    importação. Se aparecer, a importação não trouxe algum catálogo: confira o
    relatório do passo 3.

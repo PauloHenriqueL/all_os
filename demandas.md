@@ -187,10 +187,16 @@ o modelo — que passaria a considerar categoria de uso **e** tier do aluno.
 Guardar `modelo_preferido` na tabela do aluno seria um erro: espalharia a decisão
 de modelo por lugares que já competem entre si.
 
-### 4.4 Restrição de desenho: temporada precisa nascer na modelagem
-Se "semanas" significa temporada/season, `season_id` tem que entrar nas tabelas
-de MMR e duelo **desde já**. Introduzir temporada depois, sobre dados já
-acumulados, é uma migração cara e evitável.
+### 4.4 ~~Restrição de desenho: temporada precisa nascer na modelagem~~
+> **Sem efeito desde 23/09/2026 (§22.2): não haverá temporadas.** O Ranking é um
+> lugar onde se entra e se vê quem tem o melhor MMR, com filtro por tag — sem
+> período e sem zeragem. Nenhum `season_id` entra nas tabelas.
+
+O texto original, mantido como registro do que se temia: se "semanas"
+significasse temporada/season, `season_id` teria de entrar nas tabelas de MMR e
+duelo desde já, porque introduzir temporada depois, sobre dados acumulados, seria
+uma migração cara e evitável. Com a decisão de não ter temporadas, a restrição
+deixa de existir.
 
 ---
 
@@ -547,7 +553,7 @@ Ordem sugerida, com a dependência que justifica cada posição:
 | C | Gráfico de critérios da sessão e do perfil | Fase 1 #8 (logs no banco) e A (quais modos alimentam o perfil) | 16.5 | ✅ §19 |
 | D | Critérios dinâmicos: "Adicionar critério", nome como identidade, pergunta de reset ao editar | Fase 1 #10 (prompts no banco) | 16.6 | ✅ §19 |
 | E | Tags de terapeutas; depois, filtro do ranking e dos logs por tag | Fase 1 #6 (contas) e #8 (logs) | 16.4 | ✅ §19 |
-| F | Temporadas | Definição pendente (perguntas.md B2) | 4.4 | ⏸ para depois (§18) |
+| F | ~~Temporadas~~ | — | 4.4 | ❌ **descartada em 23/09 (§22.2)**: o Ranking é MMR + filtro por tag, sem período |
 
 A fase 2 pode começar antes da virada: tudo roda no banco de dev.
 
@@ -1166,3 +1172,318 @@ Quatro pontas soltas do que a §19 entregou:
    nem calibração nem nota abaixo do piso anti-smurf (25) tocam no paciente.
 
 Suíte: **902 testes verdes**; build do cliente ok.
+
+---
+
+## 21. Virada — execução (2026-09-22)
+
+Primeira sessão de execução do `VIRADA.md`. O passo a passo detalhado vive lá;
+aqui ficam as **decisões** e os **achados** que mudam o que estava escrito.
+
+### 21.1 Decisão D1 — `JWT_SECRET` e VAPID: os mesmos
+
+**Os mesmos da produção atual na virada; rotacionar o `JWT_SECRET` depois**, com
+o sistema antigo fora do ar. Razão principal: os dois sistemas convivem no ar
+durante a migração, e secrets diferentes deslogariam quem transitasse entre eles
+— na semana de mais suporte. Detalhe e evidência no `VIRADA.md` §4.3.
+
+Fecha a última pergunta em aberto da §13.3 que não era "para depois".
+
+### 21.2 Etapa #2 da §13.1 — **feita**
+
+A cópia do volume (`⬜` desde o início) saiu em 22/09: **9,8 MB → 3,3 MB**
+comprimidos, tirados pelo **Console do painel do Railway** (sem instalar CLI),
+baixados pelo painel **Files** e guardados em **três lugares** — disco, pen drive
+e o Drive da Allos.
+
+Verificado no pacote: `gzip -t` ok, 199 entradas, raiz `data/`, **os 10 `.md` de
+prompt** (v34, v34-progressao, v34-duelo, avaliador 18 do neuro, entrevistador) e
+os **4 catálogos**.
+
+**Correção do que estava escrito:** o `VIRADA.md` e o `DEPLOY.md` mandavam usar
+`railway run bash` para pegar o volume. Isso **não funciona** — `railway run`
+executa na máquina de quem chama, com as variáveis do Railway injetadas, e não
+enxerga o `/data` do container. Corrigido no `VIRADA.md`; **o `DEPLOY.md` segue
+errado** (junto com outras defasagens: não cita `DATABASE_URL`, cita
+`OPENAI_CHAT_MODEL`, que não existe mais, e manda usar um `.env.example` que não
+está no repo).
+
+### 21.3 Cobertura do importador — conferida contra o volume real
+
+Os 30 `.json` que `server/importar-volume.js` lê estão cobertos, e os 4 catálogos
+entram por `ARQUIVOS_CATALOGO`. Três arquivos que ele leria **nunca existiram em
+produção** (`benchmark-fila.json`, `benchmark-lotes.json`,
+`trilha-eval-queue.json`): são filas de ferramenta interna que só nascem no
+primeiro uso, e arquivo ausente entra com o valor padrão.
+
+Três arquivos do volume **não são lidos por ninguém** — nem pelo importador, nem
+pelo `server/`: `desafio.json`, `desafio-history.json` e `updates.json`. Resto de
+funcionalidade antiga. Não precisam migrar.
+
+### 21.4 Banco no Neon
+
+Postgres **17.11**, região **AWS us-east-2 (Ohio)**, endpoint **direto**.
+
+- **Ohio foi mantido conscientemente**, embora `us-east-1` (Virgínia) fique ao
+  lado do `us-east4` do Railway. Custo: ~10–15 ms por consulta em produção.
+- 🔴 **Endpoint direto, não o `-pooler`.** O achado da sessão: o `-pooler` é
+  PgBouncer em modo transação, e o runner de migrações segura um **advisory lock
+  de sessão** (`server/db/migrate.js`, que já documenta precisar de conexão
+  dedicada). Sob o pooler, a proteção contra dois processos migrando ao mesmo
+  tempo sumiria **em silêncio**.
+- **Object storage desligado** na criação: o app não usa bucket; as fotos ficam
+  no volume do Railway.
+- A connection string mora em `~/.neon-url` (`chmod 600`, fora do repositório) e
+  entra nos comandos por substituição. **Não vai para o `.env`** — esse arquivo é
+  lido pelo app e pela suíte a cada execução local, e o `npm run dev` passaria a
+  falar com produção.
+
+### 21.5 Importação — em andamento ao fim da sessão
+
+`scripts/importar-volume.js` rodando contra o Neon vazio. ~2.900 inserções
+(51 contas, 29 logs, 2.789 mensagens, 2 duelos, 1 log do seletivo).
+
+**A importação é lenta por latência, não por volume:** ela insere um registro por
+vez, e do Brasil até Ohio a latência medida foi de **639 ms por consulta** — algo
+como 25 min no total. Em produção quem fala com o banco é o Railway, na mesma
+costa. Vale anotar para ninguém achar que travou.
+
+### 21.6 Ambiente de desenvolvimento, arrumado no caminho
+
+O `.env` estava com **dois blocos colados** (dev e produção) e quatro variáveis
+duplicadas — `JWT_SECRET`, `ADMIN_INITIAL_PASSWORD` e o par VAPID. Como o dotenv
+faz a **última** vencer, o dev estava rodando com o secret e o VAPID **reais de
+produção**, e com `DATA_DIR=/data` e `APP_BASE_URL` apontando para o site no ar.
+
+Separado em 22/09: `.env` só de desenvolvimento (sem chaves de IA nem de e-mail —
+modo demonstração, nenhuma chamada paga e nenhum e-mail real sai da máquina) e
+`.env.producao` com os valores reais, que **não é lido pelo app** e serve só para
+colar no Railway. O `.gitignore` passou a cobrir `.env.*`, `data-backup*.tar.gz`
+e `data/`.
+
+Também nasceu `scripts/seed-demo-terapeuta.js`: cria um terapeuta com histórico
+inventado (13 atendimentos avaliados, radar de critérios, MMR pelo motor de
+verdade) para demonstrar o produto sem chamar IA. **Recusa rodar se a
+`DATABASE_URL` não for local** — um seed desses em produção entra no ranking e
+alimenta o TRI dos pacientes reais com notas falsas.
+
+### 21.7 O que falta, em ordem
+
+1. ⏳ Terminar a importação e **ler o relatório**.
+2. ⬜ Prompts atualizados para o volume (`VIRADA.md` §3b) — **comparando antes**
+   com os de produção, para não perder edição feita pelo painel.
+3. ⬜ Projeto novo no Railway: volume em `/data`, variáveis (com a D1), uma
+   réplica, `DATABASE_URL`.
+4. ⬜ Domínio atrás do Cloudflare e `/api/admin/diagnostico-ip`.
+5. ⬜ Conferência do `VIRADA.md` §6.
+6. ⬜ Rotacionar o `JWT_SECRET` depois de o sistema antigo sair do ar (D1).
+7. ⬜ Corrigir o `DEPLOY.md` (§21.2).
+8. ⬜ Rodar a suíte: os 902 verdes são de 17/09 e **não há CI** (§8.2).
+
+---
+
+## 22. Decisões e entregas de 2026-09-23
+
+### 22.1 Escopo da importação — decisão do dono
+
+Para o banco novo sobem: **contas, contadores, catálogos (pacientes, neuro,
+exercícios, Trilha), configurações, estatísticas anônimas do Seletivo, MMR das
+contas, TRI dos personagens e os recordes 👑**.
+
+**Não sobem:** `logs.json`, `duels.json`, `active-sessions.json`,
+`selection-logs.json`, as filas de avaliação e o `progress.json` — tudo que
+carrega **transcrição de atendimento**. A pasta reduzida é `data-parcial/`
+(fora do git); o importador trata arquivo ausente com o valor padrão, então
+basta não incluí-lo.
+
+Consequências aceitas: Minhas Sessões, o radar do perfil e os Logs de Supervisão
+nascem vazios. O **Ranking não é afetado** — ele se monta com contas + MMR e não
+lê os logs.
+
+O que se preservou ao subir o `mmr.json`: a dificuldade já medida de 8 pacientes
+(46 a 52, uma delas com 12 partidas). Sem isso, todos voltariam a 50 e a
+calibração recomeçaria do zero.
+
+Efeito colateral bom: sem as 2.789 mensagens, a importação caiu de ~25 minutos
+para segundos.
+
+### 22.2 Ranking — **não haverá temporadas**
+
+Substitui a §4.4 e a linha F da §13.2. O Ranking é **um lugar onde se entra e se
+vê quem tem o melhor MMR, com filtro por tag** (Turma X, Turma Y). Não há
+período, não há zeragem, não há histórico por temporada. A pergunta B2 de
+`perguntas.md` fica sem efeito.
+
+### 22.3 `POST /api/logs` passou a gravar `criteriaNames`
+
+**O problema:** só o avaliador oficial (v34) gravava os nomes dos critérios junto
+com as notas. Os outros caminhos (bloco `[notas-supervisor]`, logs de texto)
+mandavam só os números, e a tela caía numa lista FIXA do cliente
+(`labelsForCriteria`). Enquanto a régua tinha os 8 nomes de sempre, passava
+despercebido — mas com "Adicionar critério" (§16.6) o admin renomeia, e a tela da
+sessão mostraria o nome antigo enquanto o Perfil, que resolve pela régua,
+mostraria o novo.
+
+**A correção** (`nomesDaReguaPara`, em `server/index.js`) carimba os nomes da
+régua ativa, com duas guardas:
+
+- **só em `freeplay`** — Neuro tem régua própria (v18.25) e a Trilha tem
+  critérios próprios; carimbar o v34 neles trocaria um rótulo errado por outro;
+- **só quando os números das notas batem exatamente com os da régua** — melhor
+  ficar sem nome (e cair no fallback de hoje) do que somar a nota de um critério
+  ao nome de outro. É a mesma regra que `criterios-perfil.js` já aplicava.
+
+Verificado nas três situações: freeplay com 8 notas carimba; neuro não; freeplay
+com 6 notas não.
+
+### 22.4 Peso do TRI virou configuração do admin (§16.7)
+
+O quanto uma população anônima move a dificuldade dos pacientes era só variável
+de ambiente (`TRI_PESO_SELECAO`, `TRI_PESO_VISITANTE`), e ajustar exigia deploy.
+É um **parâmetro de calibração**, que só se afina com dados reais na mão.
+
+Agora está em **Administração → Acessos**, por população, de **0 a 1**:
+
+- **0** desliga a influência daquela população no TRI;
+- **1** a iguala à de um aluno cadastrado, que é a referência fixa;
+- o teto é 1 porque acima disso a população anônima pesaria MAIS que a pessoa
+  conhecida, invertendo a razão de o peso existir.
+
+As variáveis de ambiente continuam, como **padrão de fábrica** para quem nunca
+tocou na tela. O valor é lido **a cada atendimento**, então vale já no próximo —
+e **não recalcula** as dificuldades já medidas.
+
+Novo: `POOLS_TRI` e `normalizarPesosTri` em `server/acessos.js` (módulo puro),
+`pesosTri` em `lerAcessos()`, campo no `PUT /api/admin/acessos`, seção na tela
+`AdminAcessos.jsx`, teste em `tests/tri-peso-acessos.test.js`.
+
+### 22.5 Bug que eu mesmo introduzi no `.gitignore`, corrigido
+
+A regra `data/` que entrou em 22/09 para excluir a cópia do volume casava com
+**qualquer** pasta chamada `data` em qualquer nível — inclusive `server/data/`, a
+semente do repositório. Corrigido para `/data/` e `/data-parcial/` (barra na
+frente = só na raiz). Fica o registro: em `.gitignore`, padrão sem barra inicial
+é recursivo.
+
+### 22.6 Documentação
+
+- **`MMR.md`** (novo): a fórmula completa — as duas grandezas, os 6 passos de uma
+  partida, exemplo numérico conferido, calibração, regressão do paciente, duelo,
+  camada anônima com os pesos, persistência, concorrência, constantes, cobertura
+  de testes e perguntas frequentes.
+- **`DEPLOY.md`**: estava desatualizado e com uma instrução que não funciona.
+  Corrigidos: `DATABASE_URL` (ausente, e é fail-closed) com o aviso do endpoint
+  direto; `OPENAI_CHAT_MODEL` (não existe mais) trocado pelas senhas a rotacionar
+  e pelo `CONFIAR_CF_CONNECTING_IP`; a referência a um `.env.example` que não
+  existe; e o `railway run bash` do backup, que **não enxerga o `/data`** —
+  substituído pelo Console + painel Files.
+
+### 22.7 Testes — **não rodados**, por pedido do dono
+
+`tests/tri-peso-acessos.test.js` foi escrito mas **não executado**, e a suíte não
+roda desde 17/09. Rodar antes de qualquer deploy.
+
+### 22.8 Suíte rodada e 6 bugs corrigidos (2026-09-23)
+
+A suíte rodou pela primeira vez desde 17/09. **5 falhas** e, na revisão do
+próprio diff, **mais 5 defeitos** que os testes não pegariam. Todos corrigidos;
+estado final: **73 arquivos, 921 testes verdes** e build do cliente ok.
+
+**1. Referência órfã derrubava o painel de TRI.** Ao renomear `TRI_PESOS` para
+`TRI_PESOS_PADRAO` (§22.4) ficou um uso para trás em `/api/tri/personagens`, que
+passou a devolver **500**. Foi o que as 5 falhas de `tri.test.js` acusaram — o
+teste existente fez o trabalho dele. A rota agora lê o peso da configuração do
+admin, que é o valor que ela precisa mostrar.
+
+**2. Seed de demonstração apagava o MMR de todo mundo.** 🔴
+`scripts/seed-demo-terapeuta.js` usava `mmrRepo.importar()`, que **TRUNCA**
+`mmr_players`, `mmr_characters` e `mmr_anon_players` antes de inserir. Num banco
+restaurado do volume — o alvo natural do script — isso apagaria o MMR de todas as
+contas, a dificuldade medida de todos os pacientes e as populações do TRI. Agora
+usa `mmrRepo.aplicar`, o mesmo caminho de uma partida real. Verificado: dois
+terapeutas semeados em sequência coexistem, e os personagens mantêm o TRI.
+
+**3. Peso 0 congelava a população em vez de só desligar a influência.** O
+`return` antecipado pulava o `aplicar` inteiro, então o rating da população
+parava de aprender. Religar o peso mais tarde retomaria de um rating que nunca
+aprendeu — exatamente a inflação do D que a camada anônima existe para evitar.
+Agora a população continua aprendendo e o **personagem não é gravado**: devolvê-lo
+o gravaria com `n_D` a mais e um ponto novo no histórico da regressão, ou seja,
+a população moldaria o D por outro caminho.
+
+**4. `Number(env) || padrao` engolia o 0.** `TRI_PESO_SELECAO=0` caía no 0,35 em
+vez de desligar. 0 aqui não é "não informado".
+
+**5. Campo vazio desligava o TRI em silêncio.** `Number(null)`, `Number('')` e
+`Number(undefined)` são **0**, e 0 significa "desligado". Um campo apagado na tela
+desligaria o ajuste de dificuldade em vez de voltar ao padrão. Foi **o teste novo
+que pegou**. `normalizarPeso` agora testa vazio ANTES do `Number()`; zero
+digitado continua valendo zero, e a tela avisa "vazio: salva o padrão do sistema".
+
+**6. Consulta sem guarda podia perder o atendimento do aluno.** A busca dos nomes
+da régua (§22.3) é a primeira ida ao banco no `POST /api/logs`; uma falha
+transitória devolveria 500 e o aluno perderia a sessão terminada. Agora em
+`try/catch`: sem os nomes o log é salvo do mesmo jeito e o erro vai para o painel.
+
+**Menores, no mesmo lote:** a consulta de critérios do seed não filtrava por
+régua e assumia exatamente 8 critérios (quebraria com o "Adicionar critério" que
+esta própria branch entrega); e o comentário do campo de peso prometia aceitar
+vírgula, que `<input type="number">` descarta.
+
+**Testes novos:** `tests/tri-peso-acessos.test.js` (14 casos — saneamento dos
+pesos e o comportamento de peso 0 no motor) e `tests/log-criterio-nomes.test.js`
+(5 casos — o carimbo dos nomes e as duas guardas).
+
+---
+
+## 23. Decisões do dono e entregas (2026-09-23, tarde)
+
+### 23.1 Fase 4 — **volume novo, com a cópia restaurada**
+
+O projeto novo do Railway **não** compartilha o `all_os-volume` com o antigo.
+Razão técnica: os prompts atualizados do v34 usam `{{N_CRITERIOS}}`,
+`{{N_CRITERIOS_EXTENSO}}` e `{{LISTA_CRITERIOS}}`, e quem os substitui é
+`server/avaliador-pipeline.js` — que **só existe nesta branch**. Verificado: o
+`main` não tem nenhuma ocorrência. Com volume compartilhado, copiar os prompts
+novos mudaria os prompts do sistema que ainda está no ar, que não sabe lê-los.
+
+Com volume próprio, a Fase 4 é feita antes de subir o app, sem janela, e o plano
+de volta fica limpo: o projeto antigo segue intocado até ser desligado.
+
+### 23.2 Remover critério = **desativar** (coluna `ativo`)
+
+Fecha a demanda do administrador (§22 da lista de pendências). O critério **sai
+da régua e das próximas avaliações**, mas a linha em `criterios` fica com
+`ativo = false`: nome, `historico_desde` e `nomes_anteriores` continuam lá.
+
+Por que não apagar: o gráfico do perfil junta critério pelo **nome**
+(`server/criterios-perfil.js`), então apagar a linha deixaria as notas antigas
+órfãs. E a nota final é `soma ÷ (nº de critérios × 10)` — mudar a base sem mais
+faria o ranking e o MMR misturarem duas réguas.
+
+**Como funciona.** O arquivo `.md` da régua continua sendo a fonte da verdade:
+`removerCriterio` (em `server/criterios-md.js`) tira o bloco e a linha curta,
+**renumera os que sobram** e atualiza o título; ao gravar, a sincronização
+(`sincronizarCriterios`) marca como inativo tudo que não está mais no arquivo.
+O mecanismo já existia — faltava a operação.
+
+Detalhes que a implementação garante:
+
+- **Renumera.** A numeração é posicional (é o lado do polígono do gráfico), não a
+  identidade — essa é o nome. Deixar buraco desenharia um gráfico com um lado
+  faltando.
+- **Piso de 3 critérios** (`limites-criterios.js`), recusado com mensagem clara.
+- **Repor com o mesmo nome reativa a MESMA linha**, com o mesmo `id` e o
+  histórico junto. Coberto por teste.
+- Nome do admin pode ter caractere de RegExp; o módulo escapa antes de renumerar.
+- Na tela (Administração → Prompts → Critérios da régua): botão **Desativar** com
+  confirmação em duas etapas, desabilitado no mínimo, e a mensagem diz o que
+  acontece com as notas já dadas.
+
+`DELETE /api/admin/criterios/:num`, só admin. 11 casos em
+`tests/criterios-remover.test.js`.
+
+### 23.3 Conta renomeada na importação
+
+`Victor.toscano` → `Victor.toscano-39` (colisão só de maiúsculas). **A pessoa já
+foi avisada** pelo dono. Nada a fazer.
