@@ -1487,3 +1487,16 @@ Detalhes que a implementação garante:
 
 `Victor.toscano` → `Victor.toscano-39` (colisão só de maiúsculas). **A pessoa já
 foi avisada** pelo dono. Nada a fazer.
+
+### 23.4 `ESTADO.md` — o ponto de partida de quem retoma
+
+Este documento cresceu para ~1.400 linhas e é histórico: bom para saber **por
+que** algo é como é, ruim para saber **onde paramos**. Criado o `ESTADO.md`, que
+responde só isto: o que está feito, o que falta para o deploy (com os comandos),
+as decisões fechadas que não se rediscutem, como subir o ambiente local de
+demonstração e as pontas soltas conhecidas.
+
+O `CLAUDE.md` — que é o arquivo lido em toda sessão nova — aponta para ele logo
+no cabeçalho, e ganhou a §6b com as mudanças de 23/09 e três convenções que
+custaram tempo nesta sessão: os testes usam `require` e as globais do vitest;
+não há CI; e em `.gitignore` padrão sem barra inicial é recursivo.
