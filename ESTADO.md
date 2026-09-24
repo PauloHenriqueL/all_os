@@ -1,12 +1,13 @@
 # Estado do projeto — onde paramos
 
-**Última atualização: 2026-09-23.** Este arquivo é o ponto de partida de quem
+**Última atualização: 2026-09-24.** Este arquivo é o ponto de partida de quem
 (ou o que) retoma o trabalho. Ele responde: o que está feito, o que falta, o que
 está decidido e o que não pode ser esquecido.
 
 - **Visão de produto:** `README.md`
 - **Mapa dos dados e convenções de código:** `CLAUDE.md`
-- **Histórico completo de decisões:** `demandas.md` (as mais recentes são §21 a §23)
+- **Spec do MMR por critério:** `MMR-por-criterio.md`
+- **Histórico completo de decisões:** `demandas.md` (as mais recentes são §21 a §24)
 - **Passo a passo da virada:** `VIRADA.md`
 - **Deploy e variáveis:** `DEPLOY.md`
 - **O MMR explicado:** `MMR.md`
@@ -15,53 +16,119 @@ está decidido e o que não pode ser esquecido.
 
 ## 1. Onde o projeto está
 
-A branch **`feat/postgres-fase1`** tem a Fase 1 (migração para PostgreSQL) e a
-Fase 2 (demandas novas) **completas**. Último commit: `e040390`.
+**Branch de trabalho: `main` do fork `PauloHenriqueL/all_os`, no commit `729c425`
+(Merge PR #1 do `feat/mmr-por-criterio-fase2` — 2026-09-24).** O Railway novo
+puxa daqui. **Não** vamos empurrar mais nada para o `arthurbpinho/all_os`.
 
-**⚠️ Trabalho em andamento (2026-09-24):** a reforma do §24 (MMR por critério +
-retenção) está **em progresso na `feat/postgres-fase1`**, quatro commits novos
-já empurrados para o fork (`5d31e8d`, `a179405`, `0e8554e`, `02909d8`).
+Suíte: **913 testes verdes em 71 arquivos** (com Postgres local up, `npm run db:up`).
+Build do cliente ok (`npm run build`, 4,24s).
 
-Feito:
-- §24.0 completo: podas de `logs`/`duels`/`selecao_logs` fora, dedupe de
-  WhatsApp fora, banners de expiração fora.
-- Migrações `016_mmr_por_criterio_schema.sql` e `017_mmr_reset_por_criterio.sql`
-  (a 017 arquiva `mmr_*` em `*_arquivo_v1` antes do TRUNCATE — spec §11).
-- Motor `server/mmr.js` reescrito por critério; `server/repos/mmr.js`
-  ajustado (recorde aceita `origem` + `userId` null).
-- Wrappers `aplicarPartidaCompetitiva`, `registrarTriAnonimo` e
-  `applyDuelMmr` migrados; rotas `/api/ranking`, `/api/me/mmr`,
-  `/api/freeplay`, `/api/tri/personagens` adaptadas; recorde 👑 do seletivo
-  criado (spec §9); `mmr_delta` no log gravado (spec §12).
-- `tests/mmr.test.js` reescrito para os 16 critérios de aceite da spec §16:
-  **41 testes verdes** (verificado com `TEST_DATABASE_URL= npx vitest run
-  tests/mmr.test.js`). `tests/db-repo-mmr.test.js` reescrito para o novo
-  shape. Testes obsoletos do motor antigo apagados
-  (`mmr-pvp.test.js`, `tri-dificuldade.test.js`, `tri.test.js`).
+### §24 do demandas.md — MMR por critério + retenção — **implementada**
 
-Pendente:
-- Testes de integração (`character-records.test.js`, `duel.test.js`,
-  `tri-peso-acessos.test.js`, bloco de MMR em `regression.test.js`)
-  precisam ser adaptados para o novo payload das rotas.
-- Front das 5 telas da spec §10: `Profile.jsx` (radar por critério, MMR sem
-  teto), `Ranking.jsx` (MMR total derivado — hoje já lê `mmr` do payload
-  via alias, deve funcionar mas sem o radar), `Competitive.jsx`,
-  `DuelSession.jsx` (venceu-cada-critério + soma-zero), `SelecaoDashboard.jsx`
-  (nota ponderada visível).
-- `MMR.md` reescrito (o atual descreve a régua antiga).
-- Suíte inteira (`npm test`) verde. Hoje só o `tests/mmr.test.js` isolado
-  foi rodado sem banco; o resto depende do Docker up (`npm run db:up`).
+- **§24.0 retenção:** podas automáticas de `logs`/`duels`/`selecao_logs` e
+  dedupe de WhatsApp do seletivo removidas. Dados de aluno são persistentes.
+  O único TTL restante fica em `uso_ia` e `sessoes_ativas` (operacional).
+- **Motor `server/mmr.js`** reescrito por critério segundo `MMR-por-criterio.md`:
+  P_c, D_c, β_c, K = max(1/(n+1); 0,20), janela 10, ganho 0,2/0,1, β em
+  [0,5; 1,5] com intercepto fixo em 50, trava-25, admin não move nada.
+- **`server/repos/mmr.js`** ajustado: `registrarRecorde` aceita `userId=null`
+  + `origem` ('competitivo' | 'selecao'); `aplicar` recebe/devolve `fontes`
+  por critério.
+- **Migrações escritas** (rodam sozinhas no boot):
+  - `016_mmr_por_criterio_schema.sql` — `character_records` sem FK em user_id
+    + coluna `origem`; `logs.mmr_delta JSONB`.
+  - `017_mmr_reset_por_criterio.sql` — arquiva `mmr_players`, `mmr_characters`,
+    `mmr_anon_players` em `*_arquivo_v1` (spec §11 exige "consultável") e
+    depois `TRUNCATE`. `character_records` **não** é tocada (recordes 👑 ficam).
+- **Rotas em `server/index.js`:** `aplicarPartidaCompetitiva`, `registrarTriAnonimo`
+  e `applyDuelMmr` migrados para a API por critério; `runComparativeEvaluation`
+  extrai criteriosA/B do resultado do avaliador comparativo; `/api/ranking`,
+  `/api/me/mmr`, `/api/freeplay`, `/api/tri/personagens` adaptadas; recorde
+  👑 do seletivo criado.
+- **Front:** `Profile.jsx` mostra MMR por critério (0..10 com uma casa
+  decimal); `DuelSession.jsx` mostra "Por critério" com ✓/✗/= de quem
+  venceu cada um; `SelecaoDashboard.jsx` tem `<details>` "Ver D por critério"
+  por caso. Ranking segue funcionando via alias `mmr` no payload.
+- **Testes:** `mmr.test.js` cobre os 16 critérios de aceite da spec §16;
+  `db-repo-mmr.test.js` reescrito para o novo shape; os 3 testes de motor
+  antigo (`mmr-pvp`, `tri-dificuldade`, `tri`) apagados; integração
+  (`selecao`, `tags`, `tri-peso-acessos`, `duel`, bloco de MMR em
+  `regression`) adaptados.
+- **Docs:** `MMR.md` reescrito do zero; `MMR-por-criterio.md` (spec do Alan)
+  presente na raiz; §24 do `demandas.md` marcada como implementada.
 
-**Suíte anterior ao WIP: 74 arquivos, 932 testes verdes.** Build do cliente ok.
+### O que ficou pra depois de subir
 
-Os repositórios são **públicos**. A branch está no fork
-`github.com/PauloHenriqueL/all_os`. O upstream `arthurbpinho/all_os` (remote
-`origin`) **nunca recebeu nada** — decidir se o Railway novo aponta para o fork
-ou se abre um PR.
+Nenhum débito de código bloqueia o deploy. O que **rodar em produção** vai
+expor:
+
+- Todos os 51 alunos vão para **calibração** no primeiro boot (a migração
+  017 zera o motor). É por design (spec §11 + [pergunta 6a do grilling]).
+  Alan avisa os alunos presencialmente — sem aviso in-app.
+- Os 8 **recordes 👑 são mantidos**.
+- As tabelas `logs`, `duels`, `selecao_logs` já vieram vazias do Neon (§22.1),
+  então "Minhas Sessões", "Radar do perfil" e "Logs de Supervisão" nascem
+  vazios. Não é bug.
 
 ---
 
-## 2. O banco novo (Neon) — já tem dados
+## 2. Deploy em andamento — Railway novo
+
+**Neon:** verificado 2026-09-24. Bate 100% com a §3 abaixo — schema,
+migrações 001–015 aplicadas, contagens, formato do JSONB antigo (com `S_aj`
+na janela, o que confirma que 017 vai fazer diferença).
+
+**Volume:** o `.tar.gz` novo já foi empacotado em `/tmp/volume-novo.tar.gz`
+(1,37 MB — 10 prompts .md + patient-photos + exercise-photos + avatar-pool +
+comunidade-avatars). **Pronto para upload.** Se `/tmp/` sumiu (reboot),
+refazer com os comandos da §4 abaixo.
+
+**Railway:** projeto `all_os` criado no fork (visto na screenshot do usuário,
+Building 00:12). Source: `PauloHenriqueL/all_os`, branch `main`.
+
+Falta, tudo pelo painel:
+
+1. **Variables** (Raw Editor) — colar `.env.producao` inteiro **mais**:
+   - `DATABASE_URL=<neon-url sem -pooler>` (fica em `~/.neon-url`; o app
+     usa transações longas e o pooler mata)
+   - `SELECAO_PASSWORD=<senha nova>` — a session anterior gerou
+     `wLFepsorn7Qy7FkSjcP1`, mas trocar pelo painel de admin assim que subir
+   - `BENCHMARK_PASSWORD=<senha nova>` — gerada `oleZExsx2DoYPhzkLBrV`
+   - **`JWT_SECRET` e VAPID iguais** aos da produção atual (§21.1). Rotacionar
+     depois, com o antigo fora do ar.
+   - **Não colocar** `ADMIN_INITIAL_PASSWORD` — o Neon já tem admins, essa
+     var só é lida quando não existe nenhum admin (fail-closed).
+2. **Settings → Volumes** — criar volume mount `/data`, 1 GB.
+3. **Files** — upload de `/tmp/volume-novo.tar.gz` para `/data/`.
+4. **Console** —
+   ```bash
+   tar xzf /data/volume-novo.tar.gz -C /data
+   rm /data/volume-novo.tar.gz
+   ls /data/prompts/avaliacao/v34/   # tem que listar 3 .md
+   ```
+5. **Deployments → Restart** — no log, procurar:
+   ```
+   [migracao] 016_mmr_por_criterio_schema.sql aplicada.
+   [migracao] 017_mmr_reset_por_criterio.sql aplicada.
+   [prompts] N prompt(s) semeado(s) no banco.
+   ```
+   **Não** deve aparecer `[catalogo] semeado(s)` (catálogos vieram do Neon).
+
+Depois:
+
+- **Fase 6 — domínio:** apontar `treinamento.allos.org.br` para o projeto
+  novo, atrás do Cloudflare com proxy laranja. Como admin, abrir
+  `/api/admin/diagnostico-ip` **pelo domínio próprio**: se
+  `conexaoEhCloudflare: false`, setar `CONFIAR_CF_CONNECTING_IP=sempre` e
+  desativar o domínio `*.up.railway.app`.
+- **Fase 7 — conferência:** os 8 itens de `VIRADA.md` §6. Lembrar:
+  "Minhas Sessões vazias" e "candidatos vazios" **são o esperado**.
+- **Depois da virada:** rotacionar `JWT_SECRET`; anotar em `demandas.md`
+  as dívidas técnicas (ver §5 abaixo); começar a pensar em CI.
+
+---
+
+## 3. O banco novo (Neon) — verificado 2026-09-24
 
 Projeto no **Neon**, Postgres **17.11**, região **AWS us-east-2 (Ohio)**,
 endpoint **direto** (sem `-pooler` — ver `VIRADA.md` §2 para o porquê).
@@ -84,11 +151,12 @@ a cada execução local, e o `npm run dev` passaria a falar com produção.
 | `contadores_usuario` | 5 (inclui o próximo id de conta) |
 | `catalogo_itens` | **12** (8 pacientes, 2 neuro, exercícios, Trilha) |
 | `configuracoes` | 5 |
-| `mmr_players` | **15** |
-| `mmr_characters` | **8** — o TRI, a dificuldade medida |
+| `mmr_players` | **15** — formato antigo, com `S_aj` na janela |
+| `mmr_characters` | **8** — o TRI da fórmula antiga |
 | `mmr_anon_players` | 1 |
-| `character_records` | **8** recordes 👑 |
+| `character_records` | **8** recordes 👑 (mantidos pelo reset) |
 | `selecao_estatisticas` | **120** registros anônimos |
+| `schema_migrations` | **15** (001 até 015_catalogo.sql) |
 
 ### O que ficou de fora, por decisão do dono (§22.1)
 
@@ -96,32 +164,31 @@ a cada execução local, e o `npm run dev` passaria a falar com produção.
 `notificacoes`, `comunidade` — **todos em zero**. Nenhuma transcrição de
 atendimento subiu.
 
-Consequência a não confundir com defeito: **Minhas Sessões, o radar do perfil e
-os Logs de Supervisão nascem vazios.** O Ranking funciona, porque se monta com
-contas + MMR e não lê os logs.
-
 ### O que ainda entra sozinho
 
-`prompt_arquivos` e `criterios` estão em **0**, e isso é o esperado: os prompts
-**não são importados**. Eles são semeados no **primeiro boot do app**, lendo o
-`/data/prompts` do volume. É a Fase 4 abaixo.
+`prompt_arquivos` e `criterios` estão em **0** — o boot do app semeia lendo
+`/data/prompts/*.md` (por isso o volume tem que subir ANTES do primeiro boot
+completo).
+
+### O que as migrações 016 e 017 vão fazer no primeiro boot
+
+Verificado antes de rodar:
+
+- `character_records.character_records_user_id_fkey` **existe** → 016 dropa.
+- `character_records` **sem** coluna `origem` → 016 adiciona.
+- `logs` **sem** coluna `mmr_delta` → 016 adiciona.
+- `mmr_players.estado` no formato antigo (`P`, `n`, `W` com `S_aj`) → 017
+  copia para `mmr_players_arquivo_v1` (com `arquivado_em`) e trunca. Idem
+  `mmr_characters` (com `fontes`) e `mmr_anon_players`.
+
+Depois disso o estado do motor volta a zero. Todos vão para calibração. Os
+recordes 👑 continuam.
 
 ---
 
-## 3. O que falta para o deploy
+## 4. Comandos úteis (repetir se algo se perder)
 
-### Fase 4 — prompts para o volume novo
-
-**Decidido (§23.1): volume NOVO, com a cópia restaurada.** Não compartilhe o
-volume com o projeto antigo — os prompts atualizados do v34 usam
-`{{N_CRITERIOS}}`, e o código do `main` não substitui esses marcadores
-(verificado). Com volume próprio isto pode ser feito com calma, antes de subir o
-app, sem tocar no que está no ar.
-
-A comparação já foi feita: dos 10 `.md`, **6 são idênticos** aos de produção e
-**4 são mais novos na máquina do Paulo** — e as 4 diferenças são só a mudança da
-§20.1 (tirar o número de critérios escrito à mão). **Não há edição de produção a
-preservar**; a cópia é segura, numa direção só.
+### Regerar o `.tar.gz` do volume
 
 ```bash
 cd /home/paulo/Documentos/projetos/allos/all_os
@@ -132,63 +199,61 @@ cp avaliacao/v34-duelo/sintetizador-v34-duelo.md /tmp/volume-novo/prompts/avalia
 cp avaliacao/v34-progressao/missao-v34-progressao.md /tmp/volume-novo/prompts/avaliacao/v34-progressao/
 cp avaliacao/v34-progressao/sintetizador-v34-progressao.md /tmp/volume-novo/prompts/avaliacao/v34-progressao/
 cp -r data/patient-photos data/exercise-photos data/avatar-pool data/comunidade-avatars /tmp/volume-novo/ 2>/dev/null
-cd /tmp/volume-novo && tar czf /tmp/volume-novo.tar.gz . && find . -name '*.md' | wc -l   # tem de dar 10
+cd /tmp/volume-novo && tar czf /tmp/volume-novo.tar.gz . && find . -name '*.md' | wc -l  # tem de dar 10
 ```
 
-### Fase 5 — projeto novo no Railway
+### Consultar o Neon (só leitura)
 
-1. New Project → deploy da branch `feat/postgres-fase1`.
-2. Volume **novo** montado em `/data` (não o `all_os-volume` do projeto antigo).
-3. Variáveis: o conteúdo de `.env.producao` **mais** `DATABASE_URL` (a do Neon,
-   sem `-pooler`).
-   - `JWT_SECRET` e o par **VAPID**: **os mesmos da produção atual** (§21.1).
-     Motivo: os dois sistemas convivem no ar durante a migração, e secrets
-     diferentes deslogariam quem transitasse entre eles. Rotacionar o secret
-     **depois**, com o antigo fora do ar.
-   - **Trocar** `SELECAO_PASSWORD` e `BENCHMARK_PASSWORD`: os defaults do código
-     (`allos01`, `albires1`) estão num repositório público.
-4. **Uma réplica só.** Prompts, catálogos, configurações e sidequests têm cópia
-   em memória; duas instâncias divergem.
-5. Restaurar o volume e só então subir.
-6. No log do boot: deve aparecer `[prompts] N prompt(s) semeado(s) no banco.`;
-   **não** deve aparecer `[catalogo] semeado(s)` — os catálogos já vieram da
-   importação.
+```bash
+psql "$(cat ~/.neon-url)" -c "SELECT COUNT(*) FROM users;"
+```
 
-### Fase 6 — domínio
+### Rodar testes local (precisa Docker)
 
-Apontar `treinamento.allos.org.br` para o projeto novo, atrás do Cloudflare com
-proxy laranja. Depois, como admin, abrir `/api/admin/diagnostico-ip` **pelo
-domínio próprio**: se `conexaoEhCloudflare: false`, definir
-`CONFIAR_CF_CONNECTING_IP=sempre` **e** desativar o domínio `*.up.railway.app`.
+```bash
+npm run db:up          # Postgres 17 em Docker, porta 5433
+npm test               # 913 testes esperados
+npm run build          # cliente
+```
 
-### Fase 7 — conferência
+### Sanity checks para depois do deploy
 
-Os 8 itens de `VIRADA.md` §6, lembrando que **Logs de Supervisão vazios e lista
-de candidatos do Seletivo vazia são o esperado** neste escopo.
-
-### Depois da virada
-
-- Rotacionar o `JWT_SECRET`.
-- Decidir o destino do upstream (PR ou não).
-- **Criar CI** — não existe nenhum; os testes só rodam se alguém rodar.
+- No painel do Neon, `SELECT * FROM mmr_players_arquivo_v1 LIMIT 1;` — deve
+  existir, com dados do formato antigo.
+- No app, entrar como admin, ir em Ranking — todos aparecem "em calibração"
+  (nEntradas < 3 depois do reset).
+- No perfil de qualquer aluno, o bloco "Por critério" ainda não deve mostrar
+  nada (só aparece depois da 3ª avaliação).
 
 ---
 
-## 4. Decisões fechadas que não se rediscutem
+## 5. Decisões fechadas que não se rediscutem
 
 | Decisão | Onde |
 |---|---|
-| **Sem temporadas.** O Ranking é MMR + filtro por tag, sem período nem zeragem | §22.2 |
+| **Sem temporadas.** Ranking é MMR + filtro por tag, sem período nem zeragem | §22.2 |
 | **Importação sem transcrições** de atendimento | §22.1 |
 | **Volume novo** na virada, não compartilhado | §23.1 |
 | **`JWT_SECRET` e VAPID iguais** na virada; rotacionar depois | §21.1 |
 | **Remover critério = desativar** (coluna `ativo`), nunca apagar | §23.2 |
 | **Peso do TRI é do admin**, na tela de Acessos, de 0 a 1 | §22.4 |
 | **Ohio** (us-east-2) mantido conscientemente, apesar do Railway em Virgínia | §21.4 |
+| **Dados de aluno são persistentes** — sem poda de `logs`/`duels`/`selecao_logs` | §24.0 |
+| **MMR por critério com reset one-shot** no deploy da §24; recordes 👑 ficam | §24.1–§24.4 |
+| **Alan avisa os alunos presencialmente** — sem aviso in-app do reset | §24 grilling |
+| **Sem dedupe automático por WhatsApp** no seletivo — admin controla via troca de senha | §24.0 |
+| **Deploy pela `main` do fork** — não vamos mandar para o `arthurbpinho/all_os` | 2026-09-24 |
+| **`.env` fica como está** — não vamos migrar variáveis para o admin nesta rodada | 2026-09-24 |
+
+Dívidas técnicas anotadas mas **não** para agora (ver §7):
+- Migrar para admin panel: `CADASTRO_EXTERNO_ABERTO`, `TERMOS_URL`,
+  `TERMOS_VERSAO`, `PRIVACIDADE_URL`, `MAIL_FROM_NAME`.
+- Rótulo dos critérios no perfil do aluno é "Crit. <id>" — quando surgir um
+  endpoint público de nomes ativos, trocar por nome do critério.
 
 ---
 
-## 5. Ambiente local de demonstração
+## 6. Ambiente local de demonstração
 
 Serve para mostrar o produto sem gastar com IA. **Tudo o que está aqui é local e
 não deve ir para o Neon.**
@@ -232,7 +297,24 @@ blocos colados, e como o dotenv faz a **última** chave vencer, o dev rodava com
 
 ---
 
-## 6. Cópias do volume antigo
+## 7. Pontas soltas conhecidas
+
+- **Não há CI.** Rodar `npm test` antes de qualquer deploy.
+- **A conta `Victor.toscano` virou `Victor.toscano-39`** na importação, por
+  colisão de maiúsculas (a unicidade é case-insensitive). A pessoa **já foi
+  avisada**.
+- **`VISITOR_TRI` está desligado.** A avaliação de visitante não existe; o
+  caminho está escrito e testado, e liga com `VISITOR_TRI=1`.
+- **Comunidade**: retenção (agora que é persistente por §24.0) e moderação
+  seguem sem definição avançada — decidir eventualmente.
+- **Rótulo dos critérios** no perfil ainda é `Crit. <id>` — precisa de rota
+  pública que devolva os nomes ativos.
+- **`ADMIN_INITIAL_PASSWORD`** não vai para o Railway (fail-closed só ativa
+  se o banco não tiver admin nenhum, o que não é o caso).
+
+---
+
+## 8. Cópias do volume antigo
 
 O backup de `/data` de produção (9,8 MB → 3,3 MB comprimido) está em **três
 lugares**: disco do Paulo, pen drive e o Drive da Allos. É a única cópia dos
@@ -246,17 +328,3 @@ No repositório, já descompactadas e **fora do git**:
 Para tirar uma cópia nova: **painel do Railway → serviço → Console**, e baixar
 pelo painel **Files**. **`railway run bash` não funciona** — ele executa na sua
 máquina, não dentro do container, e não enxerga o `/data`.
-
----
-
-## 7. Pontas soltas conhecidas
-
-- **Não há CI.** Rodar `npm test` antes de qualquer deploy.
-- **A conta `Victor.toscano` virou `Victor.toscano-39`** na importação, por
-  colisão de maiúsculas (a unicidade é case-insensitive). A pessoa **já foi
-  avisada**.
-- **Retenção de 30 dias** dos logs roda na leitura: sessões semeadas com mais de
-  30 dias somem sozinhas. Não é bug.
-- **`VISITOR_TRI` está desligado.** A avaliação de visitante não existe; o
-  caminho está escrito e testado, e liga com `VISITOR_TRI=1`.
-- **Comunidade**: retenção e moderação seguem sem definição (adiadas).

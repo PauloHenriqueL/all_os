@@ -1505,16 +1505,25 @@ não há CI; e em `.gitignore` padrão sem barra inicial é recursivo.
 
 ## 24. Reforma do MMR e TRI por critério + política de retenção
 
-> **Em andamento na branch `feat/postgres-fase1` (2026-09-24).** §24.0 (retenção)
-> completo. §24.1–§24.5 no servidor: migrações 016+017 escritas, motor
-> `server/mmr.js` reescrito por critério, `server/repos/mmr.js` ajustado (recorde
-> aceita `origem` + `userId` null), wrappers `aplicarPartidaCompetitiva`,
-> `registrarTriAnonimo` e `applyDuelMmr` migrados, rotas `/api/logs` e
-> `/api/tri/personagens` adaptadas, recorde 👑 do seletivo criado (spec §9),
-> `mmr_delta` no log gravado (spec §12). Falta: testes reescritos (os antigos
-> quebram por definição — spec §16), front das 5 telas da §10 (perfil/radar,
-> ranking, ficha, duelo, dashboard do seletivo), `MMR.md` reescrito, marcar
-> `ESTADO.md`. Nada foi commitado ainda.
+> **Implementada em 2026-09-24.** No fork `PauloHenriqueL/all_os`, `main` em
+> `729c425` (Merge PR #1 do `feat/mmr-por-criterio-fase2`). Suíte inteira em
+> 913/913 verde com Postgres local up, build ok. Sete commits fecham a §24:
+>
+> - `5d31e8d` `feat(retencao)` — §24.0 completo (sem poda de logs/duels/seletivo, sem dedupe de WhatsApp)
+> - `a179405` `feat(mmr)` — motor por critério, repo, migrações 016+017, rotas, seletivo com recorde
+> - `0e8554e` `test(mmr)` — 41 testes puros cobrindo os 16 critérios de aceite da spec §16
+> - `02909d8` `fix(tests)` — ajuste de 2 asserções (critérios 2 e 10)
+> - `4031c46` `docs(estado)` — ESTADO.md sincronizado
+> - `9672e08` `test(mmr)` — testes de integração adaptados (selecao, tags, tri-peso-acessos, duel, db-repo-mmr) + `runComparativeEvaluation` extrai `criteriosA`/`criteriosB` do resultado do avaliador
+> - `0eddda0` `feat(front,docs)` — MMR por critério no perfil, "Por critério" no duelo, "Ver D por critério" no dashboard do seletivo; MMR.md reescrito
+>
+> Migrações 016 (schema — `character_records.origem`, sem FK em user_id;
+> `logs.mmr_delta`) e 017 (arquiva `mmr_players/characters/anon_players` em
+> `*_arquivo_v1` e trunca, preservando o estado antigo consultável via SQL
+> conforme spec §11) rodam sozinhas no primeiro boot do Railway novo.
+> `character_records` **não** é tocada; recordes 👑 permanecem. Todos os 51
+> alunos voltam à calibração no primeiro boot — decisão do dono (grilling
+> Pergunta 6a), sem aviso in-app (Pergunta 7c, Alan avisa presencialmente).
 
 Duas mudanças acopladas: (i) o motor de MMR e TRI passa a ser **por critério**
 (spec do Alan em `MMR-por-criterio.md` da branch de trabalho — resumida em §24.1)
