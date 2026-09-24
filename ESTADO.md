@@ -18,7 +18,17 @@ está decidido e o que não pode ser esquecido.
 A branch **`feat/postgres-fase1`** tem a Fase 1 (migração para PostgreSQL) e a
 Fase 2 (demandas novas) **completas**. Último commit: `e040390`.
 
-**Suíte: 74 arquivos, 932 testes verdes.** Build do cliente ok.
+**⚠️ Trabalho em andamento (2026-09-24):** a reforma do §24 (MMR por critério +
+retenção) está **parcialmente aplicada** na árvore, **não commitada**. Motor
+`server/mmr.js` reescrito, `server/repos/mmr.js` ajustado, migrações 016+017
+escritas, wrappers e principais rotas migrados para a nova API. Podas de
+`logs`/`duels`/`selecao_logs` e dedupe de WhatsApp removidos (§24.0 completo).
+**Falta:** rewrite dos testes (os antigos quebram por definição, spec §16),
+front das 5 telas da §10 (perfil/radar, ranking, ficha, duelo, dashboard do
+seletivo), `MMR.md` reescrito. Suíte atual **não roda até os testes serem
+adaptados**. Ver `demandas.md` §24.
+
+**Suíte anterior ao WIP: 74 arquivos, 932 testes verdes.** Build do cliente ok.
 
 Os repositórios são **públicos**. A branch está no fork
 `github.com/PauloHenriqueL/all_os`. O upstream `arthurbpinho/all_os` (remote

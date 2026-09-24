@@ -1500,3 +1500,295 @@ O `CLAUDE.md` — que é o arquivo lido em toda sessão nova — aponta para ele
 no cabeçalho, e ganhou a §6b com as mudanças de 23/09 e três convenções que
 custaram tempo nesta sessão: os testes usam `require` e as globais do vitest;
 não há CI; e em `.gitignore` padrão sem barra inicial é recursivo.
+
+---
+
+## 24. Reforma do MMR e TRI por critério + política de retenção
+
+> **Em andamento na branch `feat/postgres-fase1` (2026-09-24).** §24.0 (retenção)
+> completo. §24.1–§24.5 no servidor: migrações 016+017 escritas, motor
+> `server/mmr.js` reescrito por critério, `server/repos/mmr.js` ajustado (recorde
+> aceita `origem` + `userId` null), wrappers `aplicarPartidaCompetitiva`,
+> `registrarTriAnonimo` e `applyDuelMmr` migrados, rotas `/api/logs` e
+> `/api/tri/personagens` adaptadas, recorde 👑 do seletivo criado (spec §9),
+> `mmr_delta` no log gravado (spec §12). Falta: testes reescritos (os antigos
+> quebram por definição — spec §16), front das 5 telas da §10 (perfil/radar,
+> ranking, ficha, duelo, dashboard do seletivo), `MMR.md` reescrito, marcar
+> `ESTADO.md`. Nada foi commitado ainda.
+
+Duas mudanças acopladas: (i) o motor de MMR e TRI passa a ser **por critério**
+(spec do Alan em `MMR-por-criterio.md` da branch de trabalho — resumida em §24.1)
+e (ii) o banco vira **persistente e contínuo** para dados de aluno (§24.0).
+
+A prioridade zero é (ii): a retenção sai antes, porque a reforma do MMR pressupõe
+um histórico que não expira. Só então o motor é reescrito.
+
+### 24.0 Prioridade zero — nenhum dado de aluno é mais apagado
+
+Decisão do dono: `logs`, `duels`, `selecao_logs` e a Comunidade passam a ser
+**persistentes**. A retenção descrita em CLAUDE.md §5.5 (logs 30d, duelos 30d,
+seletivo 15d) **sai**. Motivo: o banco é para ser contínuo, e o histórico do
+aluno precisa estar disponível para o supervisor e para o próprio aluno sem
+janela.
+
+**O que NÃO muda.** Credenciais em voo — `pending_registrations` (48h),
+`password_resets` (1h), `email_changes` (48h) — continuam com TTL curto. São
+hashes de credencial, não dado do aluno; manter para sempre é risco de
+segurança (token capturado num backup vazado vira porta de entrada).
+
+**O que precisa mexer** (mapeamento real do código — não existe `server/jobs.js`;
+as podas moram nos repos e são chamadas por wrappers no `index.js`, disparados
+no boot e por rotas de admin):
+
+- **Logs (30d).** `LOG_TTL_DAYS` em [server/index.js:3545](server/index.js#L3545);
+  `podarLogsVencidos` em [server/index.js:3557](server/index.js#L3557); a
+  implementação em [server/repos/logs.js:300](server/repos/logs.js#L300)
+  (`podarVencidos`). Remover a constante e o wrapper, e deixar de chamar
+  `logsRepo.podarVencidos` no boot. A função no repo pode ficar (nunca chamada)
+  ou ser removida junto — recomendo remover, para não deixar arma carregada.
+  A rota que expõe o TTL para o front (`GET /api/…/ttl`, linha 3612) devolve
+  `null` ou some.
+- **Duelos (30d).** `DUEL_TTL_MS` em [server/index.js:8920](server/index.js#L8920);
+  `podarDueisVencidos` em [server/index.js:8999](server/index.js#L8999); repo em
+  [server/repos/duelos.js:89](server/repos/duelos.js#L89). Mesmo tratamento.
+- **Seletivo (15d).** `SELECTION_LOG_TTL_DAYS` em
+  [server/index.js:6179](server/index.js#L6179); poda em
+  [server/index.js:6216](server/index.js#L6216) e no boot em
+  [server/index.js:11462](server/index.js#L11462); repo em
+  [server/repos/selecao.js:99](server/repos/selecao.js#L99). **Cuidado:** a mesma
+  constante `SELECTION_LOG_TTL_MS` também é a **janela de dedup por WhatsApp**
+  ("1 avaliação por WhatsApp a cada 15 dias", usada em
+  [server/index.js:7236](server/index.js#L7236) e no `expiresAt` exposto ao
+  front em [server/index.js:7404](server/index.js#L7404)). A janela de dedup
+  **fica** (é regra de negócio); só a **exclusão do registro** sai. Ou seja:
+  renomear a constante para `SELECTION_DEDUP_WHATSAPP_MS`, remover a chamada de
+  `selecaoRepo.podarVencidos`, e ajustar o `expiresAt` (agora não expira — o
+  campo some ou vira `null`).
+- **`server/repos/contas.js:529` (`podarVencidos`) FICA.** Poda
+  `pending_registrations`, `password_resets` e `email_changes` — hashes de
+  credencial em voo (§24.0 acima). É segurança, não retenção de dado do aluno.
+- **CLAUDE.md §5.5** — reescrever a política de retenção (só credenciais em
+  voo têm TTL agora).
+- **Índices por data de criação** (`duels_criado_em_idx`,
+  `selecao_logs_criado_em_idx`, `logs (timestamp)`) perdem a razão original
+  (serviam à poda), mas continuam úteis para listagens ordenadas — mantêm.
+- **Janelas do motor MMR (§12 da spec) NÃO são "logs".** Os teto de 200 pontos
+  por critério × caso e de 10 pontos por critério × aluno são janelas do
+  estimador — o mais antigo sai quando entra um novo. Nada muda aí.
+
+Ordem: essa mudança entra numa migração/PR próprio **antes** da reforma do MMR.
+
+### 24.1 O que a reforma do MMR pede (resumo)
+
+Hoje o MMR do aluno (P) e a dificuldade do caso (D) são calculados sobre a
+**nota total** da avaliação. A reforma passa tudo para **por critério** (`P_c`,
+`D_c`), introduz uma **nota ponderada** (`N_c = S_c + (D_c − 50)`, sem teto e
+sem piso, recalculada na exibição a partir do D atual), e corrige bugs
+conhecidos da fórmula antiga (spec §3.9 e §4): sai o `S_aj = 50 + (S − S_esp)`,
+sai a inclinação genérica 0,5, sai o intercepto livre da regressão, sai o peso
+reduzido do seletivo/visitante sobre o D, sai o bloqueio do D durante a
+calibração.
+
+Totais (nota total ponderada, MMR total, D total) deixam de ter conta própria e
+passam a ser **derivação** dos valores por critério — a mesma agregação linear
+do `server/scoring.js` (soma × 100 ÷ base).
+
+**Regras novas de entrada de avaliação (spec §3.1):**
+
+- Avaliação de conta admin não move nada.
+- Nota total bruta < 25 não move o D (não conta como movimento), mas move o P.
+- Critério que a IA não devolveu é pulado só para aquele critério.
+
+**Recorde 👑** passa a considerar o Processo Seletivo (spec §9): candidato pode
+bater recorde, e o nome exibido é o do formulário. Visitante e admin continuam
+fora.
+
+**Recomeço.** Todo o estado do motor (`mmr_players`, `mmr_characters`,
+`mmr_anon_players`) recomeça em P=50/D=50 por critério. Os recordes 👑 são
+mantidos. Nada é preservado do estado antigo do MMR — os valores atuais foram
+calculados com a fórmula enviesada e não valem como semente.
+
+**Fora da reforma:** Neuro (critérios próprios, nunca moveu MMR), Trilha e
+Progressão (verificado no código: `mmrRepo.aplicar` só é chamado em Competitivo,
+Duelo e populações anônimas do Seletivo/Visitante).
+
+### 24.2 Impacto no schema do PostgreSQL
+
+**Tabelas cujo schema NÃO muda** (só o conteúdo do JSONB):
+
+- `mmr_players (user_id, estado JSONB, atualizado_em)`
+- `mmr_characters (character_id, estado JSONB, fontes JSONB, atualizado_em)`
+- `mmr_anon_players (pool, estado JSONB, atualizado_em)`
+
+O motor (`server/mmr.js`) é dono do formato do `estado` — o comentário da
+migração 004 já registra essa separação. A reforma reescreve o motor e o
+formato do JSONB por dentro; o schema fica intacto. `mmrRepo.aplicar`
+(server/repos/mmr.js) continua fazendo o mesmo: `INSERT ... ON CONFLICT DO
+NOTHING` para criar a linha vazia, `SELECT ... FOR UPDATE` para travar, o
+motor calcula, `UPDATE` grava. A concorrência do estado por critério é a mesma
+do estado atual — linha por caso, linha por aluno.
+
+**Tabelas que mudam:**
+
+`character_records` — hoje `user_id BIGINT REFERENCES users(id)`. Candidato do
+Seletivo não existe em `users`, então:
+
+- Remover a FK de `user_id` (fica `TEXT` ou `BIGINT` nullable sem `REFERENCES`,
+  como `duels.challenger_id`);
+- Coluna nova `origem TEXT NOT NULL DEFAULT 'competitivo'` com valores
+  `'competitivo' | 'selecao'`;
+- `user_name` continua sendo a exibição; para candidato, o registro **copia**
+  o nome de `selecao_logs.doc.candidate.nome` no momento em que o recorde é
+  batido (não depende de join com `selecao_logs` — a spec §9 permite isso, e
+  garante que a ficha do caso continua funcionando mesmo se a origem sumir).
+
+`logs` — coluna nova `mmr_delta JSONB`. A spec §12 pede que cada avaliação
+guarde "MMR antes e depois, por critério e total". A janela de `mmr_players`
+guarda "MMR de antes" só para as últimas 10 avaliações; depois disso a
+informação se perde. Com a persistência da §24.0 valendo, faz ainda mais
+sentido guardar essa auditoria completa no próprio log.
+
+`logs.criteria_scores` — hoje é `{"1": nota, "2": nota, …}` com chave
+posicional. A spec §17 pede id **estável** do critério. Migração: passa a ser
+`{"<criterios.id>": nota}` (id do banco). Logs velhos ficam com chave
+posicional; o front reconstrói a identidade via `criteria_names` (coluna já
+existe desde a migração 011) + join com `criterios.nome`. **Não há backfill em
+massa** — a migração adiciona; os logs novos entram no formato novo.
+
+`mmr_characters.fontes` — hoje é global por caso
+(`{competitivo: 12, selecao: 3, visitante: 1}`). A spec §12 pede a contagem
+**por critério** ("quantos movimentos do D vieram de cada origem", dentro do
+bloco caso × critério). Vira `{[criterioId]: {competitivo, selecao, visitante}}`.
+Motivo: com D por critério, um caso pode ter só o competitivo movendo o critério
+"manejo do vínculo" enquanto o seletivo domina "interpretação"; a dashboard de
+TRI precisa ver isso separado.
+
+**Tabelas sem mudança:**
+
+`selecao_logs` — o nome do candidato mora em `doc.candidate.nome`, que é lido
+no momento do recorde e copiado para `character_records`.
+
+`criterios`, `criterios_historico` (via colunas `historico_desde` e
+`nomes_anteriores` na migração 013) — identidade dos critérios já está
+estruturada. A reforma passa a usar `criterios.id` como chave dentro do JSONB
+do motor, o que casa naturalmente com o schema atual.
+
+`duels` — o `doc` continua sendo lido inteiro; a soma-zero por critério da
+spec §7 acontece no motor, dentro do JSONB de `mmr_players` dos dois lados.
+
+### 24.3 Formato do JSONB novo (esboço não-normativo)
+
+O motor é dono desta forma; o esboço abaixo só orienta a implementação.
+
+```
+mmr_players.estado = {
+  nEntradas: 42,                    // qtd de avaliações que entraram no sistema
+                                    // (§6: inclui as < 25, que movem o P)
+  criterios: {
+    "<criterioId>": {
+      P: 62.3,                      // MMR atual do critério (0–100)
+      n: 8,                         // qtd de avaliações do aluno nesse critério
+      janela: [                     // 10 mais recentes (§3.7)
+        { N: 71, D_antes: 55, P_antes: 60 },
+        ...
+      ]
+    },
+    ...
+  }
+}
+
+mmr_characters.estado = {
+  criterios: {
+    "<criterioId>": {
+      D: 63.1,                      // dificuldade atual do critério (10–90)
+      n_D: 12,                      // movimentos do D nesse critério
+      beta: 1.0,                    // inclinação da regressão (0,5–1,5)
+      historico: [                  // 200 pontos (§4)
+        { P: 60, D_antes: 61, S: 72 },
+        ...
+      ]
+    },
+    ...
+  }
+}
+
+mmr_characters.fontes = {
+  "<criterioId>": { competitivo: 5, selecao: 2, visitante: 0 },
+  ...
+}
+
+mmr_anon_players.estado = { ... }   // mesmo shape de mmr_players.estado
+```
+
+### 24.4 Migrações necessárias
+
+Duas migrações SQL + um PR de código:
+
+1. **PR "retenção" (antes de tudo)** — remover jobs de poda em `server/jobs.js`
+   (`logs`, `duels`, `selecao_logs`), reescrever CLAUDE.md §5.5. Sem SQL. Vai
+   sozinho, é uma decisão de política.
+
+2. **`016_mmr_por_criterio.sql`** — schema:
+   - `ALTER TABLE character_records DROP CONSTRAINT` da FK, `ADD COLUMN origem TEXT`;
+   - `ALTER TABLE logs ADD COLUMN mmr_delta JSONB`;
+   - Nada em `mmr_players`/`mmr_characters`/`mmr_anon_players` (o formato do
+     JSONB muda pelo código, não pelo SQL).
+
+3. **`017_mmr_reset.sql`** — reset one-shot, rodado no deploy que vira a chave
+   da fórmula nova:
+   - `TRUNCATE mmr_players`;
+   - `TRUNCATE mmr_characters`;
+   - `TRUNCATE mmr_anon_players`;
+   - **Não toca** em `character_records` (spec §11);
+   - **Não** preserva o estado antigo (decisão do dono: os valores foram
+     calculados com fórmula enviesada e não valem para nada).
+
+Marcadores em `migrations.json` (agora tabela `db_migracoes`) para garantir
+que o reset roda uma única vez.
+
+### 24.5 O que fica fora da reforma
+
+- **Neuro.** Critérios próprios (`server/neuro-characters.js`), nunca moveu
+  MMR/TRI. Segue com a régua dele.
+- **Trilha.** Progresso em `progress.json` (agora tabela `progresso`), sem MMR.
+- **Progressão.** Idem — não chama `mmrRepo.aplicar`.
+- **`server/scoring.js`.** A spec §14 confirma: a nota final continua sendo
+  código, não IA. O `scoring.js` só é chamado por Neuro e por logs antigos
+  (comentário no próprio arquivo diz isso). Fica intocado.
+
+### 24.6 Plano em fases
+
+1. **Retenção** (§24.0) — PR próprio, sem depender de mais nada.
+2. **Migração `016`** — schema novo.
+3. **Motor `server/mmr.js`** — reescrita completa, seguindo a spec §3 a §7.
+   Fica puro e testável, como está hoje.
+4. **Repositório `server/repos/mmr.js`** — ajustes pequenos: `newPlayer` /
+   `newCharacter` / `newAnonPopulation` passam a devolver o formato novo; o
+   `aplicar` não muda de contrato; snapshot/importar passam a serializar/ler
+   o formato novo.
+5. **Testes.** Os testes atuais que verificam as fórmulas antigas quebram por
+   definição (spec §16, aviso final). Reescrever com os 16 critérios de aceite
+   da spec.
+6. **Front.** Perfil, ranking, ficha do caso, tela do duelo, tela do
+   avaliador do seletivo (nota ponderada visível para supervisor/avaliador —
+   spec §8 e §10). Aluno nunca vê nota > 10; MMR do perfil pode passar de 10.
+7. **Migração `017` + deploy** — reset, virada da chave, ranking recomeça.
+8. **Atualizar `MMR.md` e `ESTADO.md`.**
+
+### 24.7 Verificado no código (spec §17)
+
+Antes de fechar a análise, os pontos que a spec pediu para conferir:
+
+- **`server/scoring.js` é linear.** Confirmado: `sum / (vals.length * 10) * 100`,
+  arredondado. Sem regra não linear (sem teto, sem critério eliminatório, sem
+  penalidade). O aviso da spec §18 fica registrado: se um dia a agregação
+  ganhar regra não linear, a derivação dos totais (§5) precisa ser revista.
+- **Cada avaliação já guarda a nota bruta por critério.** Sim: `logs.criteria_scores`
+  (JSONB) desde a migração 003. Falta migrar a **chave** para o id estável
+  (§24.2).
+- **Como uma conta de administrador é identificada.** `users.role = 'admin'`.
+  Múltiplos pontos em `server/index.js` já usam essa forma. O motor recebe o
+  `role` pela borda (ou o próprio `aplicar` recebe um flag `bloquearMotor`).
+- **Onde o nome do candidato do seletivo está registrado.** `selecao_logs.doc.candidate.nome`
+  (a rota do seletivo grava o formulário lá). É o valor a copiar para
+  `character_records.user_name` quando o recorde é batido.
